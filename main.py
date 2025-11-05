@@ -217,6 +217,80 @@ def admin_list():
     return jsonify({"ok": True, "count": len(users), "users": users})
 
 # ===============================
+# 🖥️ Admin: HTML přehled
+# ===============================
+@app.route("/admin", methods=["GET"])
+def admin_panel():
+    secret = request.args.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return """
+        <html><body style='font-family:system-ui;'>
+        <h2>Unauthorized</h2>
+        <p>Zadej správný ?secret= do URL.</p>
+        </body></html>
+        """, 401
+
+    # stránka s přehledem
+    return """
+<!doctype html>
+<html>
+<head>
+<meta charset='utf-8'>
+<title>Calvyx Admin</title>
+<style>
+body{font-family:system-ui;padding:20px;background:#f9fafb;}
+table{border-collapse:collapse;width:100%;max-width:1100px;}
+th,td{border:1px solid #ddd;padding:8px;text-align:left;}
+th{background:#f4f6f9;}
+button{padding:6px 10px;border-radius:6px;border:0;cursor:pointer;}
+.on{background:#16a34a;color:white;}
+.off{background:#dc2626;color:white;}
+.box{background:#fff;padding:16px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.06);max-width:1100px;}
+.small{font-size:0.9rem;color:#555;}
+pre{background:#111;color:#0f0;padding:10px;border-radius:6px;overflow:auto;}
+</style>
+</head>
+<body>
+<div class='box'>
+<h1>Calvyx – Admin přehled</h1>
+<p class='small'>Zde spravuješ klíče, jména, e-maily a stav členství. Použij tlačítka níže.</p>
+<div id='status'>Načítám data...</div>
+<table id='tbl' style='display:none;margin-top:12px;'>
+<thead><tr><th>Klíč</th><th>Jméno</th><th>E-mail</th><th>Marže</th><th>Aktivní</th><th>Akce</th></tr></thead>
+<tbody id='rows'></tbody>
+</table>
+<script>
+const SECRET=new URLSearchParams(location.search).get('secret')||'';
+async function loadList(){
+const res=await fetch('/admin/list?secret='+SECRET);const j=await res.json();
+if(!j.ok){document.getElementById('status').innerText='Chyba: '+(j.error||'?');return;}
+document.getElementById('status').innerText='Záznamů: '+j.count;
+const rows=document.getElementById('rows');rows.innerHTML='';
+j.users.forEach(u=>{
+const tr=document.createElement('tr');
+tr.innerHTML=`<td><code>${u.klic}</code></td>
+<td>${u.jmeno||'-'}</td><td>${u.email||'-'}</td><td>${u.marze}</td>
+<td>${u.aktivni?'✅':'❌'}</td>
+<td>${u.aktivni?`<button class='off' onclick="toggle('${u.klic}',false)">Deaktivovat</button>`:`<button class='on' onclick="toggle('${u.klic}',true)">Aktivovat</button>`}</td>`;
+rows.appendChild(tr);
+});
+document.getElementById('tbl').style.display='table';
+}
+async function toggle(k,a){
+if(!confirm((a?'Aktivovat':'Deaktivovat')+' '+k+'?'))return;
+const url=a?'/admin/activate':'/admin/deactivate';
+const res=await fetch(url+'?key='+k+'&secret='+SECRET);
+const j=await res.json();
+document.getElementById('status').innerText=j.message||j.error;
+loadList();
+}
+loadList();
+</script>
+</div>
+</body></html>
+"""
+
+# ===============================
 # 🚀 Spuštění
 # ===============================
 if __name__ == "__main__":
