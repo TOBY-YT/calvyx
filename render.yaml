@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: 3dcalc-api
+    name: calvyx-backend
     env: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "gunicorn main:app"
