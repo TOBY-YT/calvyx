@@ -56,26 +56,43 @@ def home():
 # ===============================
 @app.route("/create", methods=["POST"])
 def create_user():
-    marze = request.form.get("margin", "0")
-    email = request.form.get("email")
     jmeno = request.form.get("name")
+    marze = request.form.get("margin", "0")
+
+    if not jmeno:
+        return jsonify({"ok": False, "error": "Jméno je povinné."}), 400
 
     try:
         marze_val = float(marze)
     except:
         marze_val = 0.0
 
-    klic = str(uuid.uuid4())[:8]
     data = load_data()
+
+    # 🧠 Pokud už existuje stejná firma, aktualizujeme její marži
+    for key, val in data.items():
+        if isinstance(val, dict) and val.get("jmeno") == jmeno:
+            data[key]["marze"] = marze_val
+            save_data(data)
+            print(f"♻️ Aktualizována marže pro {jmeno} ({key}) na {marze_val}%")
+            return jsonify({
+                "ok": True,
+                "key": key,
+                "iframe": f'<iframe src="https://levne3d.cz/kalkulacka.html?klic={key}" width="600" height="700" style="border:none;"></iframe>',
+                "updated": True
+            })
+
+    # 🆕 Nový klíč
+    klic = str(uuid.uuid4())[:8]
     data[klic] = {
         "marze": marze_val,
         "aktivni": True,
-        "email": email,
+        "email": None,
         "jmeno": jmeno
     }
     save_data(data)
 
-    print(f"✅ Nový klíč vytvořen: {klic} ({email or 'neznámý'}) marže {marze_val}%")
+    print(f"✅ Nový klíč vytvořen: {klic} ({jmeno}) marže {marze_val}%")
 
     return jsonify({
         "ok": True,
@@ -202,7 +219,6 @@ def admin_list():
                 "klic": key,
                 "marze": val.get("marze"),
                 "aktivni": val.get("aktivni"),
-                "email": val.get("email"),
                 "jmeno": val.get("jmeno")
             })
         else:
@@ -210,7 +226,6 @@ def admin_list():
                 "klic": key,
                 "marze": val,
                 "aktivni": True,
-                "email": None,
                 "jmeno": None
             })
 
@@ -247,16 +262,15 @@ button{padding:6px 10px;border-radius:6px;border:0;cursor:pointer;}
 .off{background:#dc2626;color:white;}
 .box{background:#fff;padding:16px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.06);max-width:1100px;}
 .small{font-size:0.9rem;color:#555;}
-pre{background:#111;color:#0f0;padding:10px;border-radius:6px;overflow:auto;}
 </style>
 </head>
 <body>
 <div class='box'>
 <h1>Calvyx – Admin přehled</h1>
-<p class='small'>Zde spravuješ klíče, jména, e-maily a stav členství. Použij tlačítka níže.</p>
+<p class='small'>Zde spravuješ klíče, názvy a stav členství. Použij tlačítka níže.</p>
 <div id='status'>Načítám data...</div>
 <table id='tbl' style='display:none;margin-top:12px;'>
-<thead><tr><th>Klíč</th><th>Jméno</th><th>E-mail</th><th>Marže</th><th>Aktivní</th><th>Akce</th></tr></thead>
+<thead><tr><th>Klíč</th><th>Jméno</th><th>Marže</th><th>Aktivní</th><th>Akce</th></tr></thead>
 <tbody id='rows'></tbody>
 </table>
 <script>
@@ -269,7 +283,7 @@ const rows=document.getElementById('rows');rows.innerHTML='';
 j.users.forEach(u=>{
 const tr=document.createElement('tr');
 tr.innerHTML=`<td><code>${u.klic}</code></td>
-<td>${u.jmeno||'-'}</td><td>${u.email||'-'}</td><td>${u.marze}</td>
+<td>${u.jmeno||'-'}</td><td>${u.marze}</td>
 <td>${u.aktivni?'✅':'❌'}</td>
 <td>${u.aktivni?`<button class='off' onclick="toggle('${u.klic}',false)">Deaktivovat</button>`:`<button class='on' onclick="toggle('${u.klic}',true)">Aktivovat</button>`}</td>`;
 rows.appendChild(tr);
