@@ -19,10 +19,10 @@ def save_data(data):
         json.dump(data, f)
 
 MATERIALS = {
-    "PLA": 0.05,
-    "PETG": 0.06,
-    "TPU": 0.08,
-    "ASA": 0.07
+    "PLA": 1.0,
+    "PETG": 1.2,
+    "TPU": 1.6,
+    "ASA": 1.4,
 }
 
 STRENGTHS = {
@@ -77,3 +77,4 @@ def calculate():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
