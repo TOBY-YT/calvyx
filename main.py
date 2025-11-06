@@ -29,7 +29,7 @@ def save_data(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ===============================
-# 💰 Ceníky
+# 💰 Výchozí ceníky
 # ===============================
 MATERIALS = {
     "PLA": 2.0,
@@ -67,14 +67,23 @@ def create_user():
     except:
         marze_val = 0.0
 
+    # 🆕 Načtení cen filamentů z formuláře (pokud uživatel poslal)
+    ceny_filament = {
+        "PLA": float(request.form.get("price_PLA", MATERIALS["PLA"])),
+        "PETG": float(request.form.get("price_PETG", MATERIALS["PETG"])),
+        "TPU": float(request.form.get("price_TPU", MATERIALS["TPU"])),
+        "ASA": float(request.form.get("price_ASA", MATERIALS["ASA"]))
+    }
+
     data = load_data()
 
-    # 🧠 Pokud už existuje stejná firma, aktualizujeme její marži
+    # 🧠 Pokud už existuje stejná firma, aktualizujeme její data
     for key, val in data.items():
         if isinstance(val, dict) and val.get("jmeno") == jmeno:
             data[key]["marze"] = marze_val
+            data[key]["ceny"] = ceny_filament  # 🆕 Aktualizace individuálních cen
             save_data(data)
-            print(f"♻️ Aktualizována marže pro {jmeno} ({key}) na {marze_val}%")
+            print(f"♻️ Aktualizována marže a ceny pro {jmeno} ({key}) na {marze_val}%")
             return jsonify({
                 "ok": True,
                 "key": key,
@@ -82,13 +91,14 @@ def create_user():
                 "updated": True
             })
 
-    # 🆕 Nový klíč
+    # 🆕 Nový klíč s uloženými cenami
     klic = str(uuid.uuid4())[:8]
     data[klic] = {
         "marze": marze_val,
         "aktivni": True,
         "email": None,
-        "jmeno": jmeno
+        "jmeno": jmeno,
+        "ceny": ceny_filament
     }
     save_data(data)
 
@@ -117,9 +127,11 @@ def calculate():
         if isinstance(user, (int, float)):
             marze = user / 100
             aktivni = True
+            ceny = MATERIALS
         else:
             marze = float(user.get("marze", 0)) / 100
             aktivni = user.get("aktivni", True)
+            ceny = user.get("ceny", MATERIALS)  # 🆕 načteme uživatelské ceny
 
         if not aktivni:
             return jsonify({"error": "Tento účet nemá aktivní členství."}), 403
@@ -138,7 +150,8 @@ def calculate():
             volume = abs(model.get_mass_properties()[0]) / 1000  # cm³
             os.unlink(tmp.name)
 
-        base_price = volume * MATERIALS.get(material, 0.05) * STRENGTHS.get(strength, 1.0)
+        # 🧮 Výpočet podle individuálních cen
+        base_price = volume * ceny.get(material, MATERIALS.get(material, 0.05)) * STRENGTHS.get(strength, 1.0)
         final_price = base_price * (1 + marze)
 
         return jsonify({
@@ -219,14 +232,16 @@ def admin_list():
                 "klic": key,
                 "marze": val.get("marze"),
                 "aktivni": val.get("aktivni"),
-                "jmeno": val.get("jmeno")
+                "jmeno": val.get("jmeno"),
+                "ceny": val.get("ceny", MATERIALS)
             })
         else:
             users.append({
                 "klic": key,
                 "marze": val,
                 "aktivni": True,
-                "jmeno": None
+                "jmeno": None,
+                "ceny": MATERIALS
             })
 
     return jsonify({"ok": True, "count": len(users), "users": users})
