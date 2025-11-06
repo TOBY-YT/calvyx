@@ -56,8 +56,21 @@ def home():
 # ===============================
 @app.route("/create", methods=["POST"])
 def create_user():
-    jmeno = request.form.get("name")
-    marze = request.form.get("margin", "0")
+    # Podporujeme jak form-data tak JSON
+    if request.is_json:
+        data_input = request.json
+        jmeno = data_input.get("name")
+        marze = data_input.get("margin", "0")
+        ceny_filament = data_input.get("prices", {})
+    else:
+        jmeno = request.form.get("name")
+        marze = request.form.get("margin", "0")
+        # Načtení cen z formuláře
+        ceny_filament = {}
+        for material in MATERIALS.keys():
+            price_key = f"price_{material}"
+            if price_key in request.form:
+                ceny_filament[material] = float(request.form.get(price_key))
 
     if not jmeno:
         return jsonify({"ok": False, "error": "Jméno je povinné."}), 400
@@ -67,13 +80,14 @@ def create_user():
     except:
         marze_val = 0.0
 
-    # 🆕 Načtení cen filamentů z formuláře (pokud uživatel poslal)
-    ceny_filament = {
-        "PLA": float(request.form.get("price_PLA", MATERIALS["PLA"])),
-        "PETG": float(request.form.get("price_PETG", MATERIALS["PETG"])),
-        "TPU": float(request.form.get("price_TPU", MATERIALS["TPU"])),
-        "ASA": float(request.form.get("price_ASA", MATERIALS["ASA"]))
-    }
+    # Pokud nebyly poslány vlastní ceny, použijeme výchozí
+    if not ceny_filament:
+        ceny_filament = MATERIALS.copy()
+    else:
+        # Doplníme chybějící materiály výchozími cenami
+        for material, default_price in MATERIALS.items():
+            if material not in ceny_filament:
+                ceny_filament[material] = default_price
 
     data = load_data()
 
@@ -81,9 +95,10 @@ def create_user():
     for key, val in data.items():
         if isinstance(val, dict) and val.get("jmeno") == jmeno:
             data[key]["marze"] = marze_val
-            data[key]["ceny"] = ceny_filament  # 🆕 Aktualizace individuálních cen
+            data[key]["ceny"] = ceny_filament
             save_data(data)
             print(f"♻️ Aktualizována marže a ceny pro {jmeno} ({key}) na {marze_val}%")
+            print(f"   Ceny: {ceny_filament}")
             return jsonify({
                 "ok": True,
                 "key": key,
@@ -103,6 +118,7 @@ def create_user():
     save_data(data)
 
     print(f"✅ Nový klíč vytvořen: {klic} ({jmeno}) marže {marze_val}%")
+    print(f"   Ceny: {ceny_filament}")
 
     return jsonify({
         "ok": True,
@@ -131,7 +147,7 @@ def calculate():
         else:
             marze = float(user.get("marze", 0)) / 100
             aktivni = user.get("aktivni", True)
-            ceny = user.get("ceny", MATERIALS)  # 🆕 načteme uživatelské ceny
+            ceny = user.get("ceny", MATERIALS)
 
         if not aktivni:
             return jsonify({"error": "Tento účet nemá aktivní členství."}), 403
@@ -151,8 +167,13 @@ def calculate():
             os.unlink(tmp.name)
 
         # 🧮 Výpočet podle individuálních cen
-        base_price = volume * ceny.get(material, MATERIALS.get(material, 0.05)) * STRENGTHS.get(strength, 1.0)
+        material_price = ceny.get(material, MATERIALS.get(material, 2.0))
+        strength_mult = STRENGTHS.get(strength, 1.0)
+        base_price = volume * material_price * strength_mult
         final_price = base_price * (1 + marze)
+
+        print(f"📊 Výpočet: objem={volume:.2f}cm³, materiál={material}({material_price}Kč/cm³), pevnost={strength}({strength_mult}x), marže={marze*100}%")
+        print(f"   Základ: {base_price:.2f} Kč → Finální: {final_price:.2f} Kč")
 
         return jsonify({
             "objem_cm3": round(volume, 2),
@@ -162,7 +183,41 @@ def calculate():
             "cena": round(final_price, 2)
         })
     except Exception as e:
+        print(f"❌ Chyba při výpočtu: {str(e)}")
         return jsonify({"error": str(e)}), 400
+
+# ===============================
+# 🔍 Endpoint: Zjištění nastavení klíče
+# ===============================
+@app.route("/get_settings", methods=["GET"])
+def get_settings():
+    """Vrátí nastavení pro daný klíč (marže, ceny)"""
+    klic = request.args.get("klic")
+    if not klic:
+        return jsonify({"error": "Klíč nebyl zadán"}), 400
+    
+    data = load_data()
+    user = data.get(klic)
+    
+    if not user:
+        return jsonify({"error": "Neplatný klíč"}), 404
+    
+    if isinstance(user, (int, float)):
+        return jsonify({
+            "ok": True,
+            "marze": user,
+            "aktivni": True,
+            "jmeno": None,
+            "ceny": MATERIALS
+        })
+    
+    return jsonify({
+        "ok": True,
+        "marze": user.get("marze", 0),
+        "aktivni": user.get("aktivni", True),
+        "jmeno": user.get("jmeno"),
+        "ceny": user.get("ceny", MATERIALS)
+    })
 
 # ===============================
 # 🧩 Admin: Deaktivace klíče
@@ -269,14 +324,15 @@ def admin_panel():
 <title>Calvyx Admin</title>
 <style>
 body{font-family:system-ui;padding:20px;background:#f9fafb;}
-table{border-collapse:collapse;width:100%;max-width:1100px;}
+table{border-collapse:collapse;width:100%;max-width:1400px;}
 th,td{border:1px solid #ddd;padding:8px;text-align:left;}
 th{background:#f4f6f9;}
 button{padding:6px 10px;border-radius:6px;border:0;cursor:pointer;}
 .on{background:#16a34a;color:white;}
 .off{background:#dc2626;color:white;}
-.box{background:#fff;padding:16px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.06);max-width:1100px;}
+.box{background:#fff;padding:16px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.06);max-width:1400px;}
 .small{font-size:0.9rem;color:#555;}
+.prices{font-size:0.85rem;color:#666;}
 </style>
 </head>
 <body>
@@ -285,7 +341,7 @@ button{padding:6px 10px;border-radius:6px;border:0;cursor:pointer;}
 <p class='small'>Zde spravuješ klíče, názvy a stav členství. Použij tlačítka níže.</p>
 <div id='status'>Načítám data...</div>
 <table id='tbl' style='display:none;margin-top:12px;'>
-<thead><tr><th>Klíč</th><th>Jméno</th><th>Marže</th><th>Aktivní</th><th>Akce</th></tr></thead>
+<thead><tr><th>Klíč</th><th>Jméno</th><th>Marže</th><th>Ceny filamentů</th><th>Aktivní</th><th>Akce</th></tr></thead>
 <tbody id='rows'></tbody>
 </table>
 <script>
@@ -296,9 +352,11 @@ if(!j.ok){document.getElementById('status').innerText='Chyba: '+(j.error||'?');r
 document.getElementById('status').innerText='Záznamů: '+j.count;
 const rows=document.getElementById('rows');rows.innerHTML='';
 j.users.forEach(u=>{
+const pricesStr = Object.entries(u.ceny).map(([m,p])=>`${m}:${p}Kč`).join(', ');
 const tr=document.createElement('tr');
 tr.innerHTML=`<td><code>${u.klic}</code></td>
-<td>${u.jmeno||'-'}</td><td>${u.marze}</td>
+<td>${u.jmeno||'-'}</td><td>${u.marze}%</td>
+<td class='prices'>${pricesStr}</td>
 <td>${u.aktivni?'✅':'❌'}</td>
 <td>${u.aktivni?`<button class='off' onclick="toggle('${u.klic}',false)">Deaktivovat</button>`:`<button class='on' onclick="toggle('${u.klic}',true)">Aktivovat</button>`}</td>`;
 rows.appendChild(tr);
