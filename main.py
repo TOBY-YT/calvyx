@@ -1,31 +1,32 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from stl import mesh
-import tempfile, os, uuid
-from supabase import create_client, Client
+import tempfile, os, json, uuid
 
 app = Flask(__name__)
 CORS(app)
 
 # ===============================
-# ⚙️ Nastavení Supabase
+# ⚙️ Nastavení
 # ===============================
-SUPABASE_URL = "https://euhdtukmbilcmxljjlnp.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV1aGR0dWttYmlsY214bGpqbG5wIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjU5MTIzNywiZXhwIjoyMDc4MTY3MjM3fQ.TfMYnJbBHkH6loIZ0fYg4-8lJHM4D3qbDHFQTLHL5wc"
-ADMIN_SECRET = "Toby123"
+DATA_FILE = "marze.json"
+ADMIN_SECRET = "Toby123"  # ZMĚŇ si to na něco svého (tajné heslo!)
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("⚠️ VAROVÁNÍ: Supabase credentials nejsou nastavené!")
-    print("Nastav environment variables: SUPABASE_URL a SUPABASE_KEY")
-    supabase = None
-else:
+# ===============================
+# 🧠 Pomocné funkce
+# ===============================
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return {}
     try:
-        supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-        print("✅ Supabase připojeno!")
-        print(f"📍 URL: {SUPABASE_URL}")
-    except Exception as e:
-        print(f"❌ Chyba při připojení k Supabase: {e}")
-        supabase = None
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 # ===============================
 # 💰 Výchozí ceníky
@@ -44,95 +45,17 @@ STRENGTHS = {
 }
 
 # ===============================
-# 🧠 Databázové funkce
-# ===============================
-def get_all_keys():
-    """Načte všechny klíče z databáze"""
-    if not supabase:
-        return []
-    try:
-        response = supabase.table("keys").select("*").execute()
-        return response.data if response.data else []
-    except Exception as e:
-        print(f"❌ Chyba při načítání klíčů: {e}")
-        return []
-
-def get_key(klic):
-    """Načte jeden klíč z databáze"""
-    if not supabase:
-        return None
-    try:
-        response = supabase.table("keys").select("*").eq("klic", klic).execute()
-        return response.data[0] if response.data else None
-    except Exception as e:
-        print(f"❌ Chyba při načítání klíče {klic}: {e}")
-        return None
-
-def save_key(klic, data):
-    """Uloží nebo aktualizuje klíč v databázi"""
-    if not supabase:
-        print("❌ Supabase není připojeno!")
-        return False
-    try:
-        # Zkontroluj, jestli klíč existuje
-        existing = get_key(klic)
-        
-        payload = {
-            "klic": klic,
-            "jmeno": data.get("jmeno"),
-            "marze": float(data.get("marze", 0)),
-            "aktivni": data.get("aktivni", True),
-            "email": data.get("email"),
-            "ceny": data.get("ceny", MATERIALS)
-        }
-        
-        if existing:
-            # Update
-            supabase.table("keys").update(payload).eq("klic", klic).execute()
-            print(f"♻️ Klíč {klic} aktualizován")
-        else:
-            # Insert
-            supabase.table("keys").insert(payload).execute()
-            print(f"✅ Klíč {klic} vytvořen v DB")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Chyba při ukládání klíče {klic}: {e}")
-        return False
-
-def delete_key(klic):
-    """Smaže klíč z databáze"""
-    if not supabase:
-        return False
-    try:
-        supabase.table("keys").delete().eq("klic", klic).execute()
-        print(f"🗑️ Klíč {klic} smazán")
-        return True
-    except Exception as e:
-        print(f"❌ Chyba při mazání klíče {klic}: {e}")
-        return False
-
-# ===============================
 # 🌐 Endpoint: Stav serveru
 # ===============================
 @app.route("/")
 def home():
-    keys = get_all_keys()
-    return jsonify({
-        "status": "ok", 
-        "message": "Calvyx backend běží",
-        "total_keys": len(keys),
-        "database": "Supabase" if supabase else "Not connected"
-    })
+    return jsonify({"status": "ok", "message": "Calvyx backend běží"})
 
 # ===============================
 # 🧩 Endpoint: Vytvoření nového klíče
 # ===============================
 @app.route("/create", methods=["POST"])
 def create_user():
-    if not supabase:
-        return jsonify({"ok": False, "error": "Databáze není připojena"}), 503
-    
     # Podporujeme jak form-data tak JSON
     if request.is_json:
         data_input = request.json
@@ -166,38 +89,36 @@ def create_user():
             if material not in ceny_filament:
                 ceny_filament[material] = default_price
 
+    data = load_data()
+
     # 🧠 Pokud už existuje stejná firma, aktualizujeme její data
-    all_keys = get_all_keys()
-    for key_data in all_keys:
-        if key_data.get("jmeno") == jmeno:
-            klic = key_data["klic"]
-            save_key(klic, {
-                "jmeno": jmeno,
-                "marze": marze_val,
-                "aktivni": True,
-                "email": None,
-                "ceny": ceny_filament
-            })
-            print(f"♻️ Aktualizována marže a ceny pro {jmeno} ({klic})")
+    for key, val in data.items():
+        if isinstance(val, dict) and val.get("jmeno") == jmeno:
+            data[key]["marze"] = marze_val
+            data[key]["ceny"] = ceny_filament
+            save_data(data)
+            print(f"♻️ Aktualizována marže a ceny pro {jmeno} ({key}) na {marze_val}%")
+            print(f"   Ceny: {ceny_filament}")
             return jsonify({
                 "ok": True,
-                "key": klic,
-                "iframe": f'<iframe src="https://levne3d.cz/kalkulacka.html?klic={klic}" width="600" height="700" style="border:none;"></iframe>',
+                "key": key,
+                "iframe": f'<iframe src="https://levne3d.cz/kalkulacka.html?klic={key}" width="600" height="700" style="border:none;"></iframe>',
                 "updated": True
             })
 
-    # 🆕 Nový klíč
+    # 🆕 Nový klíč s uloženými cenami
     klic = str(uuid.uuid4())[:8]
-    success = save_key(klic, {
-        "jmeno": jmeno,
+    data[klic] = {
         "marze": marze_val,
         "aktivni": True,
         "email": None,
+        "jmeno": jmeno,
         "ceny": ceny_filament
-    })
-    
-    if not success:
-        return jsonify({"ok": False, "error": "Chyba při ukládání do databáze"}), 500
+    }
+    save_data(data)
+
+    print(f"✅ Nový klíč vytvořen: {klic} ({jmeno}) marže {marze_val}%")
+    print(f"   Ceny: {ceny_filament}")
 
     return jsonify({
         "ok": True,
@@ -212,18 +133,21 @@ def create_user():
 def calculate():
     try:
         klic = request.args.get("klic")
-        
-        if not supabase:
-            return jsonify({"error": "Databáze není připojena"}), 503
-        
-        user = get_key(klic)
+        data = load_data()
+        user = data.get(klic)
 
         if not user:
             return jsonify({"error": "Neplatný klíč."}), 400
 
-        marze = float(user.get("marze", 0)) / 100
-        aktivni = user.get("aktivni", True)
-        ceny = user.get("ceny", MATERIALS)
+        # starý formát = jen číslo
+        if isinstance(user, (int, float)):
+            marze = user / 100
+            aktivni = True
+            ceny = MATERIALS
+        else:
+            marze = float(user.get("marze", 0)) / 100
+            aktivni = user.get("aktivni", True)
+            ceny = user.get("ceny", MATERIALS)
 
         if not aktivni:
             return jsonify({"error": "Tento účet nemá aktivní členství."}), 403
@@ -248,7 +172,8 @@ def calculate():
         base_price = volume * material_price * strength_mult
         final_price = base_price * (1 + marze)
 
-        print(f"📊 Výpočet pro {klic}: objem={volume:.2f}cm³, cena={final_price:.2f}Kč")
+        print(f"📊 Výpočet: objem={volume:.2f}cm³, materiál={material}({material_price}Kč/cm³), pevnost={strength}({strength_mult}x), marže={marze*100}%")
+        print(f"   Základ: {base_price:.2f} Kč → Finální: {final_price:.2f} Kč")
 
         return jsonify({
             "objem_cm3": round(volume, 2),
@@ -266,14 +191,25 @@ def calculate():
 # ===============================
 @app.route("/get_settings", methods=["GET"])
 def get_settings():
+    """Vrátí nastavení pro daný klíč (marže, ceny)"""
     klic = request.args.get("klic")
     if not klic:
         return jsonify({"error": "Klíč nebyl zadán"}), 400
     
-    user = get_key(klic)
+    data = load_data()
+    user = data.get(klic)
     
     if not user:
         return jsonify({"error": "Neplatný klíč"}), 404
+    
+    if isinstance(user, (int, float)):
+        return jsonify({
+            "ok": True,
+            "marze": user,
+            "aktivni": True,
+            "jmeno": None,
+            "ceny": MATERIALS
+        })
     
     return jsonify({
         "ok": True,
@@ -284,67 +220,7 @@ def get_settings():
     })
 
 # ===============================
-# 🆕 Admin: Ruční vytvoření klíče
-# ===============================
-@app.route("/admin/create_manual", methods=["POST"])
-def admin_create_manual():
-    secret = request.form.get("secret") or (request.json.get("secret") if request.is_json else None)
-    
-    if secret != ADMIN_SECRET:
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
-    
-    if request.is_json:
-        jmeno = request.json.get("name")
-        marze = float(request.json.get("margin", 0))
-    else:
-        jmeno = request.form.get("name")
-        marze = float(request.form.get("margin", 0))
-    
-    if not jmeno:
-        return jsonify({"ok": False, "error": "Jméno je povinné"}), 400
-    
-    klic = str(uuid.uuid4())[:8]
-    
-    success = save_key(klic, {
-        "jmeno": jmeno,
-        "marze": marze,
-        "aktivni": True,
-        "email": None,
-        "ceny": MATERIALS.copy()
-    })
-    
-    if not success:
-        return jsonify({"ok": False, "error": "Chyba při ukládání"}), 500
-    
-    return jsonify({
-        "ok": True,
-        "message": f"Klíč vytvořen: {klic}",
-        "key": klic,
-        "name": jmeno,
-        "margin": marze
-    })
-
-# ===============================
-# 🗑️ Admin: Smazání klíče
-# ===============================
-@app.route("/admin/delete", methods=["POST", "GET"])
-def admin_delete():
-    secret = request.args.get("secret") or request.form.get("secret")
-    key = request.args.get("key") or request.form.get("key")
-    
-    if secret != ADMIN_SECRET:
-        return jsonify({"ok": False, "error": "Unauthorized"}), 401
-    
-    if not key:
-        return jsonify({"ok": False, "error": "Missing key"}), 400
-    
-    if delete_key(key):
-        return jsonify({"ok": True, "message": f"Klíč {key} smazán"})
-    else:
-        return jsonify({"ok": False, "error": "Chyba při mazání"}), 500
-
-# ===============================
-# 🧩 Admin: Deaktivace klíče (URL přístup)
+# 🧩 Admin: Deaktivace klíče
 # ===============================
 @app.route("/admin/deactivate", methods=["GET"])
 def admin_deactivate():
@@ -357,17 +233,21 @@ def admin_deactivate():
     if not key:
         return jsonify({"ok": False, "error": "Missing key"}), 400
 
-    user = get_key(key)
-    if not user:
+    data = load_data()
+    if key not in data:
         return jsonify({"ok": False, "error": "Key not found"}), 404
 
-    user["aktivni"] = False
-    save_key(key, user)
-    
+    if isinstance(data[key], dict):
+        data[key]["aktivni"] = False
+    else:
+        data[key] = {"marze": data[key], "aktivni": False}
+
+    save_data(data)
+    print(f"🚫 Klíč {key} deaktivován")
     return jsonify({"ok": True, "message": f"Klíč {key} deaktivován."})
 
 # ===============================
-# 🧩 Admin: Aktivace klíče (URL přístup)
+# 🧩 Admin: Aktivace klíče
 # ===============================
 @app.route("/admin/activate", methods=["GET"])
 def admin_activate():
@@ -377,13 +257,17 @@ def admin_activate():
     if secret != ADMIN_SECRET:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
-    user = get_key(key)
-    if not user:
+    data = load_data()
+    if key not in data:
         return jsonify({"ok": False, "error": "Key not found"}), 404
 
-    user["aktivni"] = True
-    save_key(key, user)
-    
+    if isinstance(data[key], dict):
+        data[key]["aktivni"] = True
+    else:
+        data[key] = {"marze": data[key], "aktivni": True}
+
+    save_data(data)
+    print(f"✅ Klíč {key} znovu aktivován")
     return jsonify({"ok": True, "message": f"Klíč {key} aktivován."})
 
 # ===============================
@@ -395,17 +279,25 @@ def admin_list():
     if secret != ADMIN_SECRET:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
-    keys = get_all_keys()
+    data = load_data()
     users = []
-    
-    for key_data in keys:
-        users.append({
-            "klic": key_data.get("klic"),
-            "marze": key_data.get("marze"),
-            "aktivni": key_data.get("aktivni", True),
-            "jmeno": key_data.get("jmeno"),
-            "ceny": key_data.get("ceny", MATERIALS)
-        })
+    for key, val in data.items():
+        if isinstance(val, dict):
+            users.append({
+                "klic": key,
+                "marze": val.get("marze"),
+                "aktivni": val.get("aktivni"),
+                "jmeno": val.get("jmeno"),
+                "ceny": val.get("ceny", MATERIALS)
+            })
+        else:
+            users.append({
+                "klic": key,
+                "marze": val,
+                "aktivni": True,
+                "jmeno": None,
+                "ceny": MATERIALS
+            })
 
     return jsonify({"ok": True, "count": len(users), "users": users})
 
@@ -417,12 +309,13 @@ def admin_panel():
     secret = request.args.get("secret", "")
     if secret != ADMIN_SECRET:
         return """
-        <html><body style='font-family:system-ui;padding:40px;background:#f9fafb;'>
-        <h2>🔒 Unauthorized</h2>
+        <html><body style='font-family:system-ui;'>
+        <h2>Unauthorized</h2>
         <p>Zadej správný ?secret= do URL.</p>
         </body></html>
         """, 401
 
+    # stránka s přehledem
     return """
 <!doctype html>
 <html>
@@ -430,150 +323,58 @@ def admin_panel():
 <meta charset='utf-8'>
 <title>Calvyx Admin</title>
 <style>
-body{font-family:system-ui;padding:20px;background:#f9fafb;margin:0;}
-.container{max-width:1400px;margin:0 auto;}
-.box{background:#fff;padding:20px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin-bottom:20px;}
-h1{margin:0 0 8px 0;color:#111;}
-.small{font-size:0.9rem;color:#555;margin-bottom:16px;}
-table{border-collapse:collapse;width:100%;margin-top:12px;}
-th,td{border:1px solid #e5e7eb;padding:10px;text-align:left;}
-th{background:#f3f4f6;font-weight:600;}
-button{padding:8px 14px;border-radius:8px;border:0;cursor:pointer;font-weight:500;transition:all 0.2s;}
-button:hover{transform:translateY(-1px);}
-.on{background:#10b981;color:white;}
-.off{background:#ef4444;color:white;}
-.delete{background:#f59e0b;color:white;}
+body{font-family:system-ui;padding:20px;background:#f9fafb;}
+table{border-collapse:collapse;width:100%;max-width:1400px;}
+th,td{border:1px solid #ddd;padding:8px;text-align:left;}
+th{background:#f4f6f9;}
+button{padding:6px 10px;border-radius:6px;border:0;cursor:pointer;}
+.on{background:#16a34a;color:white;}
+.off{background:#dc2626;color:white;}
+.box{background:#fff;padding:16px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.06);max-width:1400px;}
+.small{font-size:0.9rem;color:#555;}
 .prices{font-size:0.85rem;color:#666;}
-code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:0.9em;}
-.form-group{margin-bottom:16px;}
-.form-group label{display:block;margin-bottom:6px;font-weight:600;color:#374151;}
-.form-group input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;}
-.btn-primary{background:linear-gradient(135deg,#06b6d4,#3b82f6);color:white;padding:12px 24px;border:none;border-radius:8px;font-weight:600;cursor:pointer;width:100%;}
-.btn-primary:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(6,182,212,0.3);}
-#status{padding:12px;border-radius:8px;margin-bottom:16px;}
-.create-form{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
-@media(max-width:768px){.create-form{grid-template-columns:1fr;}}
 </style>
 </head>
 <body>
-<div class='container'>
 <div class='box'>
-<h1>🎛️ Calvyx – Admin Panel</h1>
-<p class='small'>Správa klíčů přes Supabase databázi</p>
-<div id='status' style='display:none;'></div>
-</div>
-
-<div class='box'>
-<h2 style='margin-top:0;'>➕ Vytvořit nový klíč</h2>
-<div class='create-form'>
-<div class='form-group'>
-<label>Jméno / Název firmy:</label>
-<input type='text' id='newName' placeholder='Např. Jan Novák'>
-</div>
-<div class='form-group'>
-<label>Marže (%):</label>
-<input type='number' id='newMargin' value='25' min='0' max='100'>
-</div>
-</div>
-<button class='btn-primary' onclick='createKey()'>✨ Vytvořit klíč</button>
-</div>
-
-<div class='box'>
-<h2 style='margin-top:0;'>📋 Seznam klíčů</h2>
-<div id='listStatus'>Načítám data...</div>
-<table id='tbl' style='display:none;'>
-<thead><tr><th>Klíč</th><th>Jméno</th><th>Marže</th><th>Ceny filamentů</th><th>Status</th><th>Akce</th></tr></thead>
+<h1>Calvyx – Admin přehled</h1>
+<p class='small'>Zde spravuješ klíče, názvy a stav členství. Použij tlačítka níže.</p>
+<div id='status'>Načítám data...</div>
+<table id='tbl' style='display:none;margin-top:12px;'>
+<thead><tr><th>Klíč</th><th>Jméno</th><th>Marže</th><th>Ceny filamentů</th><th>Aktivní</th><th>Akce</th></tr></thead>
 <tbody id='rows'></tbody>
 </table>
-</div>
-</div>
-
 <script>
 const SECRET=new URLSearchParams(location.search).get('secret')||'';
-
-function showStatus(msg,type='success'){
-const el=document.getElementById('status');
-el.style.display='block';
-el.style.background=type==='error'?'#fee2e2':'#d1fae5';
-el.style.color=type==='error'?'#991b1b':'#065f46';
-el.textContent=msg;
-setTimeout(()=>el.style.display='none',4000);
-}
-
-async function createKey(){
-const name=document.getElementById('newName').value;
-const margin=document.getElementById('newMargin').value;
-if(!name){showStatus('Jméno je povinné!','error');return;}
-const fd=new FormData();
-fd.append('secret',SECRET);
-fd.append('name',name);
-fd.append('margin',margin);
-try{
-const res=await fetch('/admin/create_manual',{method:'POST',body:fd});
-const j=await res.json();
-if(j.ok){
-showStatus('✅ Klíč vytvořen: '+j.key);
-document.getElementById('newName').value='';
-loadList();
-}else{
-showStatus('❌ '+j.error,'error');
-}
-}catch(e){showStatus('❌ Chyba: '+e.message,'error');}
-}
-
 async function loadList(){
-try{
-const res=await fetch('/admin/list?secret='+SECRET);
-const j=await res.json();
-if(!j.ok){document.getElementById('listStatus').textContent='Chyba: '+(j.error||'?');return;}
-document.getElementById('listStatus').textContent='Celkem záznamů: '+j.count;
-const rows=document.getElementById('rows');
-rows.innerHTML='';
+const res=await fetch('/admin/list?secret='+SECRET);const j=await res.json();
+if(!j.ok){document.getElementById('status').innerText='Chyba: '+(j.error||'?');return;}
+document.getElementById('status').innerText='Záznamů: '+j.count;
+const rows=document.getElementById('rows');rows.innerHTML='';
 j.users.forEach(u=>{
-const pricesStr=Object.entries(u.ceny).map(([m,p])=>`${m}:${p.toFixed(2)}Kč`).join(', ');
+const pricesStr = Object.entries(u.ceny).map(([m,p])=>`${m}:${p}Kč`).join(', ');
 const tr=document.createElement('tr');
-tr.innerHTML=`
-<td><code>${u.klic}</code></td>
-<td>${u.jmeno||'-'}</td>
-<td>${u.marze}%</td>
+tr.innerHTML=`<td><code>${u.klic}</code></td>
+<td>${u.jmeno||'-'}</td><td>${u.marze}%</td>
 <td class='prices'>${pricesStr}</td>
-<td>${u.aktivni?'✅ Aktivní':'❌ Neaktivní'}</td>
-<td>
-${u.aktivni
-?`<button class='off' onclick="toggle('${u.klic}',false)">Deaktivovat</button>`
-:`<button class='on' onclick="toggle('${u.klic}',true)">Aktivovat</button>`}
-<button class='delete' onclick="deleteKey('${u.klic}')">Smazat</button>
-</td>`;
+<td>${u.aktivni?'✅':'❌'}</td>
+<td>${u.aktivni?`<button class='off' onclick="toggle('${u.klic}',false)">Deaktivovat</button>`:`<button class='on' onclick="toggle('${u.klic}',true)">Aktivovat</button>`}</td>`;
 rows.appendChild(tr);
 });
 document.getElementById('tbl').style.display='table';
-}catch(e){document.getElementById('listStatus').textContent='❌ Chyba načítání';}
 }
-
 async function toggle(k,a){
 if(!confirm((a?'Aktivovat':'Deaktivovat')+' '+k+'?'))return;
 const url=a?'/admin/activate':'/admin/deactivate';
 const res=await fetch(url+'?key='+k+'&secret='+SECRET);
 const j=await res.json();
-showStatus(j.message||j.error,j.ok?'success':'error');
+document.getElementById('status').innerText=j.message||j.error;
 loadList();
 }
-
-async function deleteKey(k){
-if(!confirm('Opravdu smazat klíč '+k+'? Tato akce je nevratná!'))return;
-const fd=new FormData();
-fd.append('secret',SECRET);
-fd.append('key',k);
-const res=await fetch('/admin/delete',{method:'POST',body:fd});
-const j=await res.json();
-showStatus(j.message||j.error,j.ok?'success':'error');
-loadList();
-}
-
 loadList();
 </script>
-</body>
-</html>
+</div>
+</body></html>
 """
 
 # ===============================
@@ -581,4 +382,3 @@ loadList();
 # ===============================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
