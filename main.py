@@ -10,9 +10,9 @@ CORS(app)
 # ===============================
 # ⚙️ Nastavení Supabase
 # ===============================
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "Toby123")
+SUPABASE_URL = "https://euhdtukmbilcmxljjlnp.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV1aGR0dWttYmlsY214bGpqbG5wIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjU5MTIzNywiZXhwIjoyMDc4MTY3MjM3fQ.TfMYnJbBHkH6loIZ0fYg4-8lJHM4D3qbDHFQTLHL5wc"
+ADMIN_SECRET = "Toby123"
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     print("⚠️ VAROVÁNÍ: Supabase credentials nejsou nastavené!")
@@ -581,3 +581,4 @@ loadList();
 # ===============================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
