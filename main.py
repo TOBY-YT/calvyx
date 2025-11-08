@@ -2,31 +2,54 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from stl import mesh
 import tempfile, os, json, uuid
+import pymysql
+from pymysql.cursors import DictCursor
 
 app = Flask(__name__)
 CORS(app)
 
 # ===============================
-# ⚙️ Nastavení
+# ⚙️ Nastavení MySQL
 # ===============================
-DATA_FILE = "marze.json"
-ADMIN_SECRET = "Toby123"  # ZMĚŇ si to na něco svého (tajné heslo!)
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_NAME = os.environ.get("DB_NAME", "")
+DB_USER = os.environ.get("DB_USER", "")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "Toby123")
+
+print(f"🔧 MySQL Host: {DB_HOST}")
+print(f"🔧 Database: {DB_NAME}")
+print(f"🔧 User: {DB_USER}")
 
 # ===============================
-# 🧠 Pomocné funkce
+# 🔌 Databázové připojení
 # ===============================
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {}
+def get_db_connection():
+    """Vytvoří připojení k MySQL databázi"""
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+        connection = pymysql.connect(
+            host=DB_HOST,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            charset='utf8mb4',
+            cursorclass=DictCursor
+        )
+        return connection
+    except Exception as e:
+        print(f"❌ Chyba připojení k databázi: {e}")
+        return None
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+# Test připojení při startu
+try:
+    test_conn = get_db_connection()
+    if test_conn:
+        test_conn.close()
+        print("✅ MySQL databáze připojena!")
+    else:
+        print("⚠️ Nepodařilo se připojit k databázi")
+except Exception as e:
+    print(f"⚠️ Chyba při testování připojení: {e}")
 
 # ===============================
 # 💰 Výchozí ceníky
@@ -45,11 +68,150 @@ STRENGTHS = {
 }
 
 # ===============================
+# 🧠 Databázové funkce
+# ===============================
+def get_all_keys():
+    """Načte všechny klíče z databáze"""
+    conn = get_db_connection()
+    if not conn:
+        return []
+    
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM calvyx_keys")
+            results = cursor.fetchall()
+            
+            # Parsuj JSON ceny
+            for row in results:
+                if row.get('ceny'):
+                    try:
+                        row['ceny'] = json.loads(row['ceny'])
+                    except:
+                        row['ceny'] = MATERIALS
+                else:
+                    row['ceny'] = MATERIALS
+            
+            return results
+    except Exception as e:
+        print(f"❌ Chyba při načítání klíčů: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_key(klic):
+    """Načte jeden klíč z databáze"""
+    conn = get_db_connection()
+    if not conn:
+        return None
+    
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM calvyx_keys WHERE klic = %s", (klic,))
+            result = cursor.fetchone()
+            
+            if result and result.get('ceny'):
+                try:
+                    result['ceny'] = json.loads(result['ceny'])
+                except:
+                    result['ceny'] = MATERIALS
+            elif result:
+                result['ceny'] = MATERIALS
+            
+            return result
+    except Exception as e:
+        print(f"❌ Chyba při načítání klíče {klic}: {e}")
+        return None
+    finally:
+        conn.close()
+
+def save_key(klic, data):
+    """Uloží nebo aktualizuje klíč v databázi"""
+    conn = get_db_connection()
+    if not conn:
+        print("❌ Nelze se připojit k databázi!")
+        return False
+    
+    try:
+        with conn.cursor() as cursor:
+            # Zjisti, jestli klíč existuje
+            cursor.execute("SELECT id FROM calvyx_keys WHERE klic = %s", (klic,))
+            existing = cursor.fetchone()
+            
+            # Připrav JSON ceny
+            ceny_json = json.dumps(data.get('ceny', MATERIALS), ensure_ascii=False)
+            
+            if existing:
+                # UPDATE
+                sql = """
+                UPDATE calvyx_keys 
+                SET jmeno = %s, marze = %s, aktivni = %s, email = %s, ceny = %s
+                WHERE klic = %s
+                """
+                cursor.execute(sql, (
+                    data.get('jmeno'),
+                    float(data.get('marze', 0)),
+                    data.get('aktivni', True),
+                    data.get('email'),
+                    ceny_json,
+                    klic
+                ))
+                print(f"♻️ Klíč {klic} aktualizován v DB")
+            else:
+                # INSERT
+                sql = """
+                INSERT INTO calvyx_keys (klic, jmeno, marze, aktivni, email, ceny)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                cursor.execute(sql, (
+                    klic,
+                    data.get('jmeno'),
+                    float(data.get('marze', 0)),
+                    data.get('aktivni', True),
+                    data.get('email'),
+                    ceny_json
+                ))
+                print(f"✅ Klíč {klic} vytvořen v DB")
+            
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"❌ Chyba při ukládání klíče {klic}: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def delete_key(klic):
+    """Smaže klíč z databáze"""
+    conn = get_db_connection()
+    if not conn:
+        return False
+    
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM calvyx_keys WHERE klic = %s", (klic,))
+            conn.commit()
+            print(f"🗑️ Klíč {klic} smazán z DB")
+            return True
+    except Exception as e:
+        print(f"❌ Chyba při mazání klíče {klic}: {e}")
+        return False
+    finally:
+        conn.close()
+
+# ===============================
 # 🌐 Endpoint: Stav serveru
 # ===============================
 @app.route("/")
 def home():
-    return jsonify({"status": "ok", "message": "Calvyx backend běží"})
+    keys = get_all_keys()
+    db_status = "Connected" if get_db_connection() else "Disconnected"
+    return jsonify({
+        "status": "ok",
+        "message": "Calvyx backend běží",
+        "total_keys": len(keys),
+        "database": f"MySQL ({db_status})"
+    })
 
 # ===============================
 # 🧩 Endpoint: Vytvoření nového klíče
@@ -65,7 +227,6 @@ def create_user():
     else:
         jmeno = request.form.get("name")
         marze = request.form.get("margin", "0")
-        # Načtení cen z formuláře
         ceny_filament = {}
         for material in MATERIALS.keys():
             price_key = f"price_{material}"
@@ -80,45 +241,44 @@ def create_user():
     except:
         marze_val = 0.0
 
-    # Pokud nebyly poslány vlastní ceny, použijeme výchozí
     if not ceny_filament:
         ceny_filament = MATERIALS.copy()
     else:
-        # Doplníme chybějící materiály výchozími cenami
         for material, default_price in MATERIALS.items():
             if material not in ceny_filament:
                 ceny_filament[material] = default_price
 
-    data = load_data()
-
-    # 🧠 Pokud už existuje stejná firma, aktualizujeme její data
-    for key, val in data.items():
-        if isinstance(val, dict) and val.get("jmeno") == jmeno:
-            data[key]["marze"] = marze_val
-            data[key]["ceny"] = ceny_filament
-            save_data(data)
-            print(f"♻️ Aktualizována marže a ceny pro {jmeno} ({key}) na {marze_val}%")
-            print(f"   Ceny: {ceny_filament}")
+    # Zkontroluj, jestli firma už existuje
+    all_keys = get_all_keys()
+    for key_data in all_keys:
+        if key_data.get("jmeno") == jmeno:
+            klic = key_data["klic"]
+            save_key(klic, {
+                "jmeno": jmeno,
+                "marze": marze_val,
+                "aktivni": True,
+                "email": None,
+                "ceny": ceny_filament
+            })
             return jsonify({
                 "ok": True,
-                "key": key,
-                "iframe": f'<iframe src="https://levne3d.cz/kalkulacka.html?klic={key}" width="600" height="700" style="border:none;"></iframe>',
+                "key": klic,
+                "iframe": f'<iframe src="https://levne3d.cz/kalkulacka.html?klic={klic}" width="600" height="700" style="border:none;"></iframe>',
                 "updated": True
             })
 
-    # 🆕 Nový klíč s uloženými cenami
+    # Nový klíč
     klic = str(uuid.uuid4())[:8]
-    data[klic] = {
+    success = save_key(klic, {
+        "jmeno": jmeno,
         "marze": marze_val,
         "aktivni": True,
         "email": None,
-        "jmeno": jmeno,
         "ceny": ceny_filament
-    }
-    save_data(data)
-
-    print(f"✅ Nový klíč vytvořen: {klic} ({jmeno}) marže {marze_val}%")
-    print(f"   Ceny: {ceny_filament}")
+    })
+    
+    if not success:
+        return jsonify({"ok": False, "error": "Chyba při ukládání"}), 500
 
     return jsonify({
         "ok": True,
@@ -133,21 +293,14 @@ def create_user():
 def calculate():
     try:
         klic = request.args.get("klic")
-        data = load_data()
-        user = data.get(klic)
+        user = get_key(klic)
 
         if not user:
             return jsonify({"error": "Neplatný klíč."}), 400
 
-        # starý formát = jen číslo
-        if isinstance(user, (int, float)):
-            marze = user / 100
-            aktivni = True
-            ceny = MATERIALS
-        else:
-            marze = float(user.get("marze", 0)) / 100
-            aktivni = user.get("aktivni", True)
-            ceny = user.get("ceny", MATERIALS)
+        marze = float(user.get("marze", 0)) / 100
+        aktivni = user.get("aktivni", True)
+        ceny = user.get("ceny", MATERIALS)
 
         if not aktivni:
             return jsonify({"error": "Tento účet nemá aktivní členství."}), 403
@@ -159,21 +312,18 @@ def calculate():
         material = request.form.get("material", "PLA")
         strength = request.form.get("strength", "střední")
 
-        # výpočet objemu
         with tempfile.NamedTemporaryFile(delete=False, suffix=".stl") as tmp:
             file.save(tmp.name)
             model = mesh.Mesh.from_file(tmp.name)
-            volume = abs(model.get_mass_properties()[0]) / 1000  # cm³
+            volume = abs(model.get_mass_properties()[0]) / 1000
             os.unlink(tmp.name)
 
-        # 🧮 Výpočet podle individuálních cen
         material_price = ceny.get(material, MATERIALS.get(material, 2.0))
         strength_mult = STRENGTHS.get(strength, 1.0)
         base_price = volume * material_price * strength_mult
         final_price = base_price * (1 + marze)
 
-        print(f"📊 Výpočet: objem={volume:.2f}cm³, materiál={material}({material_price}Kč/cm³), pevnost={strength}({strength_mult}x), marže={marze*100}%")
-        print(f"   Základ: {base_price:.2f} Kč → Finální: {final_price:.2f} Kč")
+        print(f"📊 Výpočet pro {klic}: objem={volume:.2f}cm³, cena={final_price:.2f}Kč")
 
         return jsonify({
             "objem_cm3": round(volume, 2),
@@ -191,25 +341,13 @@ def calculate():
 # ===============================
 @app.route("/get_settings", methods=["GET"])
 def get_settings():
-    """Vrátí nastavení pro daný klíč (marže, ceny)"""
     klic = request.args.get("klic")
     if not klic:
         return jsonify({"error": "Klíč nebyl zadán"}), 400
     
-    data = load_data()
-    user = data.get(klic)
-    
+    user = get_key(klic)
     if not user:
         return jsonify({"error": "Neplatný klíč"}), 404
-    
-    if isinstance(user, (int, float)):
-        return jsonify({
-            "ok": True,
-            "marze": user,
-            "aktivni": True,
-            "jmeno": None,
-            "ceny": MATERIALS
-        })
     
     return jsonify({
         "ok": True,
@@ -218,6 +356,65 @@ def get_settings():
         "jmeno": user.get("jmeno"),
         "ceny": user.get("ceny", MATERIALS)
     })
+
+# ===============================
+# 🆕 Admin: Ruční vytvoření klíče
+# ===============================
+@app.route("/admin/create_manual", methods=["POST"])
+def admin_create_manual():
+    secret = request.form.get("secret") or (request.json.get("secret") if request.is_json else None)
+    
+    if secret != ADMIN_SECRET:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    
+    if request.is_json:
+        jmeno = request.json.get("name")
+        marze = float(request.json.get("margin", 0))
+    else:
+        jmeno = request.form.get("name")
+        marze = float(request.form.get("margin", 0))
+    
+    if not jmeno:
+        return jsonify({"ok": False, "error": "Jméno je povinné"}), 400
+    
+    klic = str(uuid.uuid4())[:8]
+    success = save_key(klic, {
+        "jmeno": jmeno,
+        "marze": marze,
+        "aktivni": True,
+        "email": None,
+        "ceny": MATERIALS.copy()
+    })
+    
+    if not success:
+        return jsonify({"ok": False, "error": "Chyba při ukládání"}), 500
+    
+    return jsonify({
+        "ok": True,
+        "message": f"Klíč vytvořen: {klic}",
+        "key": klic,
+        "name": jmeno,
+        "margin": marze
+    })
+
+# ===============================
+# 🗑️ Admin: Smazání klíče
+# ===============================
+@app.route("/admin/delete", methods=["POST", "GET"])
+def admin_delete():
+    secret = request.args.get("secret") or request.form.get("secret")
+    key = request.args.get("key") or request.form.get("key")
+    
+    if secret != ADMIN_SECRET:
+        return jsonify({"ok": False, "error": "Unauthorized"}), 401
+    
+    if not key:
+        return jsonify({"ok": False, "error": "Missing key"}), 400
+    
+    if delete_key(key):
+        return jsonify({"ok": True, "message": f"Klíč {key} smazán"})
+    else:
+        return jsonify({"ok": False, "error": "Chyba při mazání"}), 500
 
 # ===============================
 # 🧩 Admin: Deaktivace klíče
@@ -233,17 +430,13 @@ def admin_deactivate():
     if not key:
         return jsonify({"ok": False, "error": "Missing key"}), 400
 
-    data = load_data()
-    if key not in data:
+    user = get_key(key)
+    if not user:
         return jsonify({"ok": False, "error": "Key not found"}), 404
 
-    if isinstance(data[key], dict):
-        data[key]["aktivni"] = False
-    else:
-        data[key] = {"marze": data[key], "aktivni": False}
-
-    save_data(data)
-    print(f"🚫 Klíč {key} deaktivován")
+    user["aktivni"] = False
+    save_key(key, user)
+    
     return jsonify({"ok": True, "message": f"Klíč {key} deaktivován."})
 
 # ===============================
@@ -257,17 +450,13 @@ def admin_activate():
     if secret != ADMIN_SECRET:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
-    data = load_data()
-    if key not in data:
+    user = get_key(key)
+    if not user:
         return jsonify({"ok": False, "error": "Key not found"}), 404
 
-    if isinstance(data[key], dict):
-        data[key]["aktivni"] = True
-    else:
-        data[key] = {"marze": data[key], "aktivni": True}
-
-    save_data(data)
-    print(f"✅ Klíč {key} znovu aktivován")
+    user["aktivni"] = True
+    save_key(key, user)
+    
     return jsonify({"ok": True, "message": f"Klíč {key} aktivován."})
 
 # ===============================
@@ -279,25 +468,17 @@ def admin_list():
     if secret != ADMIN_SECRET:
         return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
-    data = load_data()
+    keys = get_all_keys()
     users = []
-    for key, val in data.items():
-        if isinstance(val, dict):
-            users.append({
-                "klic": key,
-                "marze": val.get("marze"),
-                "aktivni": val.get("aktivni"),
-                "jmeno": val.get("jmeno"),
-                "ceny": val.get("ceny", MATERIALS)
-            })
-        else:
-            users.append({
-                "klic": key,
-                "marze": val,
-                "aktivni": True,
-                "jmeno": None,
-                "ceny": MATERIALS
-            })
+    
+    for key_data in keys:
+        users.append({
+            "klic": key_data.get("klic"),
+            "marze": key_data.get("marze"),
+            "aktivni": key_data.get("aktivni", True),
+            "jmeno": key_data.get("jmeno"),
+            "ceny": key_data.get("ceny", MATERIALS)
+        })
 
     return jsonify({"ok": True, "count": len(users), "users": users})
 
@@ -309,13 +490,12 @@ def admin_panel():
     secret = request.args.get("secret", "")
     if secret != ADMIN_SECRET:
         return """
-        <html><body style='font-family:system-ui;'>
-        <h2>Unauthorized</h2>
+        <html><body style='font-family:system-ui;padding:40px;background:#f9fafb;'>
+        <h2>🔒 Unauthorized</h2>
         <p>Zadej správný ?secret= do URL.</p>
         </body></html>
         """, 401
 
-    # stránka s přehledem
     return """
 <!doctype html>
 <html>
@@ -323,58 +503,150 @@ def admin_panel():
 <meta charset='utf-8'>
 <title>Calvyx Admin</title>
 <style>
-body{font-family:system-ui;padding:20px;background:#f9fafb;}
-table{border-collapse:collapse;width:100%;max-width:1400px;}
-th,td{border:1px solid #ddd;padding:8px;text-align:left;}
-th{background:#f4f6f9;}
-button{padding:6px 10px;border-radius:6px;border:0;cursor:pointer;}
-.on{background:#16a34a;color:white;}
-.off{background:#dc2626;color:white;}
-.box{background:#fff;padding:16px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.06);max-width:1400px;}
-.small{font-size:0.9rem;color:#555;}
+body{font-family:system-ui;padding:20px;background:#f9fafb;margin:0;}
+.container{max-width:1400px;margin:0 auto;}
+.box{background:#fff;padding:20px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);margin-bottom:20px;}
+h1{margin:0 0 8px 0;color:#111;}
+.small{font-size:0.9rem;color:#555;margin-bottom:16px;}
+table{border-collapse:collapse;width:100%;margin-top:12px;}
+th,td{border:1px solid #e5e7eb;padding:10px;text-align:left;}
+th{background:#f3f4f6;font-weight:600;}
+button{padding:8px 14px;border-radius:8px;border:0;cursor:pointer;font-weight:500;transition:all 0.2s;}
+button:hover{transform:translateY(-1px);}
+.on{background:#10b981;color:white;}
+.off{background:#ef4444;color:white;}
+.delete{background:#f59e0b;color:white;}
 .prices{font-size:0.85rem;color:#666;}
+code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:0.9em;}
+.form-group{margin-bottom:16px;}
+.form-group label{display:block;margin-bottom:6px;font-weight:600;color:#374151;}
+.form-group input{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;}
+.btn-primary{background:linear-gradient(135deg,#06b6d4,#3b82f6);color:white;padding:12px 24px;border:none;border-radius:8px;font-weight:600;cursor:pointer;width:100%;}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(6,182,212,0.3);}
+#status{padding:12px;border-radius:8px;margin-bottom:16px;}
+.create-form{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+@media(max-width:768px){.create-form{grid-template-columns:1fr;}}
 </style>
 </head>
 <body>
+<div class='container'>
 <div class='box'>
-<h1>Calvyx – Admin přehled</h1>
-<p class='small'>Zde spravuješ klíče, názvy a stav členství. Použij tlačítka níže.</p>
-<div id='status'>Načítám data...</div>
-<table id='tbl' style='display:none;margin-top:12px;'>
-<thead><tr><th>Klíč</th><th>Jméno</th><th>Marže</th><th>Ceny filamentů</th><th>Aktivní</th><th>Akce</th></tr></thead>
+<h1>🎛️ Calvyx – Admin Panel</h1>
+<p class='small'>Správa klíčů přes MySQL databázi na Vedos</p>
+<div id='status' style='display:none;'></div>
+</div>
+
+<div class='box'>
+<h2 style='margin-top:0;'>➕ Vytvořit nový klíč</h2>
+<div class='create-form'>
+<div class='form-group'>
+<label>Jméno / Název firmy:</label>
+<input type='text' id='newName' placeholder='Např. Jan Novák'>
+</div>
+<div class='form-group'>
+<label>Marže (%):</label>
+<input type='number' id='newMargin' value='25' min='0' max='100'>
+</div>
+</div>
+<button class='btn-primary' onclick='createKey()'>✨ Vytvořit klíč</button>
+</div>
+
+<div class='box'>
+<h2 style='margin-top:0;'>📋 Seznam klíčů</h2>
+<div id='listStatus'>Načítám data...</div>
+<table id='tbl' style='display:none;'>
+<thead><tr><th>Klíč</th><th>Jméno</th><th>Marže</th><th>Ceny filamentů</th><th>Status</th><th>Akce</th></tr></thead>
 <tbody id='rows'></tbody>
 </table>
+</div>
+</div>
+
 <script>
 const SECRET=new URLSearchParams(location.search).get('secret')||'';
+
+function showStatus(msg,type='success'){
+const el=document.getElementById('status');
+el.style.display='block';
+el.style.background=type==='error'?'#fee2e2':'#d1fae5';
+el.style.color=type==='error'?'#991b1b':'#065f46';
+el.textContent=msg;
+setTimeout(()=>el.style.display='none',4000);
+}
+
+async function createKey(){
+const name=document.getElementById('newName').value;
+const margin=document.getElementById('newMargin').value;
+if(!name){showStatus('Jméno je povinné!','error');return;}
+const fd=new FormData();
+fd.append('secret',SECRET);
+fd.append('name',name);
+fd.append('margin',margin);
+try{
+const res=await fetch('/admin/create_manual',{method:'POST',body:fd});
+const j=await res.json();
+if(j.ok){
+showStatus('✅ Klíč vytvořen: '+j.key);
+document.getElementById('newName').value='';
+loadList();
+}else{
+showStatus('❌ '+j.error,'error');
+}
+}catch(e){showStatus('❌ Chyba: '+e.message,'error');}
+}
+
 async function loadList(){
-const res=await fetch('/admin/list?secret='+SECRET);const j=await res.json();
-if(!j.ok){document.getElementById('status').innerText='Chyba: '+(j.error||'?');return;}
-document.getElementById('status').innerText='Záznamů: '+j.count;
-const rows=document.getElementById('rows');rows.innerHTML='';
+try{
+const res=await fetch('/admin/list?secret='+SECRET);
+const j=await res.json();
+if(!j.ok){document.getElementById('listStatus').textContent='Chyba: '+(j.error||'?');return;}
+document.getElementById('listStatus').textContent='Celkem záznamů: '+j.count;
+const rows=document.getElementById('rows');
+rows.innerHTML='';
 j.users.forEach(u=>{
-const pricesStr = Object.entries(u.ceny).map(([m,p])=>`${m}:${p}Kč`).join(', ');
+const pricesStr=Object.entries(u.ceny).map(([m,p])=>`${m}:${p.toFixed(2)}Kč`).join(', ');
 const tr=document.createElement('tr');
-tr.innerHTML=`<td><code>${u.klic}</code></td>
-<td>${u.jmeno||'-'}</td><td>${u.marze}%</td>
+tr.innerHTML=`
+<td><code>${u.klic}</code></td>
+<td>${u.jmeno||'-'}</td>
+<td>${u.marze}%</td>
 <td class='prices'>${pricesStr}</td>
-<td>${u.aktivni?'✅':'❌'}</td>
-<td>${u.aktivni?`<button class='off' onclick="toggle('${u.klic}',false)">Deaktivovat</button>`:`<button class='on' onclick="toggle('${u.klic}',true)">Aktivovat</button>`}</td>`;
+<td>${u.aktivni?'✅ Aktivní':'❌ Neaktivní'}</td>
+<td>
+${u.aktivni
+?`<button class='off' onclick="toggle('${u.klic}',false)">Deaktivovat</button>`
+:`<button class='on' onclick="toggle('${u.klic}',true)">Aktivovat</button>`}
+<button class='delete' onclick="deleteKey('${u.klic}')">Smazat</button>
+</td>`;
 rows.appendChild(tr);
 });
 document.getElementById('tbl').style.display='table';
+}catch(e){document.getElementById('listStatus').textContent='❌ Chyba načítání';}
 }
+
 async function toggle(k,a){
 if(!confirm((a?'Aktivovat':'Deaktivovat')+' '+k+'?'))return;
 const url=a?'/admin/activate':'/admin/deactivate';
 const res=await fetch(url+'?key='+k+'&secret='+SECRET);
 const j=await res.json();
-document.getElementById('status').innerText=j.message||j.error;
+showStatus(j.message||j.error,j.ok?'success':'error');
 loadList();
 }
+
+async function deleteKey(k){
+if(!confirm('Opravdu smazat klíč '+k+'? Tato akce je nevratná!'))return;
+const fd=new FormData();
+fd.append('secret',SECRET);
+fd.append('key',k);
+const res=await fetch('/admin/delete',{method:'POST',body:fd});
+const j=await res.json();
+showStatus(j.message||j.error,j.ok?'success':'error');
+loadList();
+}
+
 loadList();
 </script>
-</div>
-</body></html>
+</body>
+</html>
 """
 
 # ===============================
