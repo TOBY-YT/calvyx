@@ -8,14 +8,15 @@ from pymysql.cursors import DictCursor
 app = Flask(__name__)
 CORS(app)
 
+
 # ===============================
 # ⚙️ Nastavení MySQL
-# ===============================
-DB_HOST = os.environ.get("DB_HOST", "localhost")
-DB_NAME = os.environ.get("DB_NAME", "")
-DB_USER = os.environ.get("DB_USER", "")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+DB_HOST = "md393.wedos.net"
+DB_NAME = "d383121_calvyx"
+DB_USER = "a383121_calvyx"
+DB_PASSWORD = "pusQd9K5"
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "Toby123")
+
 
 print(f"🔧 MySQL Host: {DB_HOST}")
 print(f"🔧 Database: {DB_NAME}")
@@ -654,3 +655,4 @@ loadList();
 # ===============================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
