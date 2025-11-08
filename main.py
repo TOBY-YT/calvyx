@@ -2,53 +2,27 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from stl import mesh
 import tempfile, os, json, uuid
-import pymysql
-from pymysql.cursors import DictCursor
+from supabase import create_client, Client
 
 app = Flask(__name__)
 CORS(app)
 
-
 # ===============================
-# ⚙️ Nastavení MySQL
-DB_HOST = "md393.wedos.net"
-DB_NAME = "d383121_calvyx"
-DB_USER = "a383121_calvyx"
-DB_PASSWORD = "pusQd9K5"
+# ⚙️ Nastavení Supabase
+# ===============================
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "Toby123")
 
+print(f"🔧 Supabase URL: {SUPABASE_URL}")
 
-print(f"🔧 MySQL Host: {DB_HOST}")
-print(f"🔧 Database: {DB_NAME}")
-print(f"🔧 User: {DB_USER}")
-
-# ===============================
-# 🔌 Databázové připojení
-# ===============================
-def get_db_connection():
-    """Vytvoří připojení k MySQL databázi"""
-    try:
-        connection = pymysql.connect(
-            host=DB_HOST,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            charset='utf8mb4',
-            cursorclass=DictCursor
-        )
-        return connection
-    except Exception as e:
-        print(f"❌ Chyba připojení k databázi: {e}")
-        return None
+# Inicializace Supabase klienta
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Test připojení při startu
 try:
-    test_conn = get_db_connection()
-    if test_conn:
-        test_conn.close()
-        print("✅ MySQL databáze připojena!")
-    else:
-        print("⚠️ Nepodařilo se připojit k databázi")
+    test_query = supabase.table('calvyx_keys').select("id").limit(1).execute()
+    print("✅ Supabase připojena!")
 except Exception as e:
     print(f"⚠️ Chyba při testování připojení: {e}")
 
@@ -73,132 +47,77 @@ STRENGTHS = {
 # ===============================
 def get_all_keys():
     """Načte všechny klíče z databáze"""
-    conn = get_db_connection()
-    if not conn:
-        return []
-    
     try:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM calvyx_keys")
-            results = cursor.fetchall()
-            
-            # Parsuj JSON ceny
-            for row in results:
-                if row.get('ceny'):
-                    try:
-                        row['ceny'] = json.loads(row['ceny'])
-                    except:
-                        row['ceny'] = MATERIALS
-                else:
-                    row['ceny'] = MATERIALS
-            
-            return results
+        response = supabase.table('calvyx_keys').select("*").execute()
+        results = response.data
+        
+        # Parsuj JSON ceny (v Supabase jsou už jako dict)
+        for row in results:
+            if not row.get('ceny'):
+                row['ceny'] = MATERIALS
+        
+        return results
     except Exception as e:
         print(f"❌ Chyba při načítání klíčů: {e}")
         return []
-    finally:
-        conn.close()
 
 def get_key(klic):
     """Načte jeden klíč z databáze"""
-    conn = get_db_connection()
-    if not conn:
-        return None
-    
     try:
-        with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM calvyx_keys WHERE klic = %s", (klic,))
-            result = cursor.fetchone()
-            
-            if result and result.get('ceny'):
-                try:
-                    result['ceny'] = json.loads(result['ceny'])
-                except:
-                    result['ceny'] = MATERIALS
-            elif result:
-                result['ceny'] = MATERIALS
-            
-            return result
+        response = supabase.table('calvyx_keys').select("*").eq('klic', klic).execute()
+        
+        if not response.data:
+            return None
+        
+        result = response.data[0]
+        
+        if not result.get('ceny'):
+            result['ceny'] = MATERIALS
+        
+        return result
     except Exception as e:
         print(f"❌ Chyba při načítání klíče {klic}: {e}")
         return None
-    finally:
-        conn.close()
 
 def save_key(klic, data):
     """Uloží nebo aktualizuje klíč v databázi"""
-    conn = get_db_connection()
-    if not conn:
-        print("❌ Nelze se připojit k databázi!")
-        return False
-    
     try:
-        with conn.cursor() as cursor:
-            # Zjisti, jestli klíč existuje
-            cursor.execute("SELECT id FROM calvyx_keys WHERE klic = %s", (klic,))
-            existing = cursor.fetchone()
-            
-            # Připrav JSON ceny
-            ceny_json = json.dumps(data.get('ceny', MATERIALS), ensure_ascii=False)
-            
-            if existing:
-                # UPDATE
-                sql = """
-                UPDATE calvyx_keys 
-                SET jmeno = %s, marze = %s, aktivni = %s, email = %s, ceny = %s
-                WHERE klic = %s
-                """
-                cursor.execute(sql, (
-                    data.get('jmeno'),
-                    float(data.get('marze', 0)),
-                    data.get('aktivni', True),
-                    data.get('email'),
-                    ceny_json,
-                    klic
-                ))
-                print(f"♻️ Klíč {klic} aktualizován v DB")
-            else:
-                # INSERT
-                sql = """
-                INSERT INTO calvyx_keys (klic, jmeno, marze, aktivni, email, ceny)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """
-                cursor.execute(sql, (
-                    klic,
-                    data.get('jmeno'),
-                    float(data.get('marze', 0)),
-                    data.get('aktivni', True),
-                    data.get('email'),
-                    ceny_json
-                ))
-                print(f"✅ Klíč {klic} vytvořen v DB")
-            
-            conn.commit()
-            return True
+        # Zjisti, jestli klíč existuje
+        existing = get_key(klic)
+        
+        # Připrav data
+        save_data = {
+            'klic': klic,
+            'jmeno': data.get('jmeno'),
+            'marze': float(data.get('marze', 0)),
+            'aktivni': data.get('aktivni', True),
+            'email': data.get('email'),
+            'ceny': data.get('ceny', MATERIALS)
+        }
+        
+        if existing:
+            # UPDATE
+            response = supabase.table('calvyx_keys').update(save_data).eq('klic', klic).execute()
+            print(f"♻️ Klíč {klic} aktualizován v DB")
+        else:
+            # INSERT
+            response = supabase.table('calvyx_keys').insert(save_data).execute()
+            print(f"✅ Klíč {klic} vytvořen v DB")
+        
+        return True
     except Exception as e:
         print(f"❌ Chyba při ukládání klíče {klic}: {e}")
-        conn.rollback()
         return False
-    finally:
-        conn.close()
 
 def delete_key(klic):
     """Smaže klíč z databáze"""
-    conn = get_db_connection()
-    if not conn:
-        return False
-    
     try:
-        with conn.cursor() as cursor:
-            cursor.execute("DELETE FROM calvyx_keys WHERE klic = %s", (klic,))
-            conn.commit()
-            print(f"🗑️ Klíč {klic} smazán z DB")
-            return True
+        supabase.table('calvyx_keys').delete().eq('klic', klic).execute()
+        print(f"🗑️ Klíč {klic} smazán z DB")
+        return True
     except Exception as e:
         print(f"❌ Chyba při mazání klíče {klic}: {e}")
         return False
-    finally:
-        conn.close()
 
 # ===============================
 # 🌐 Endpoint: Stav serveru
@@ -206,12 +125,17 @@ def delete_key(klic):
 @app.route("/")
 def home():
     keys = get_all_keys()
-    db_status = "Connected" if get_db_connection() else "Disconnected"
+    try:
+        supabase.table('calvyx_keys').select("id").limit(1).execute()
+        db_status = "Connected"
+    except:
+        db_status = "Disconnected"
+    
     return jsonify({
         "status": "ok",
         "message": "Calvyx backend běží",
         "total_keys": len(keys),
-        "database": f"MySQL ({db_status})"
+        "database": f"Supabase ({db_status})"
     })
 
 # ===============================
@@ -533,7 +457,7 @@ code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:0.9em;}
 <div class='container'>
 <div class='box'>
 <h1>🎛️ Calvyx – Admin Panel</h1>
-<p class='small'>Správa klíčů přes MySQL databázi na Vedos</p>
+<p class='small'>Správa klíčů přes Supabase databázi</p>
 <div id='status' style='display:none;'></div>
 </div>
 
@@ -655,5 +579,3 @@ loadList();
 # ==============================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
-
