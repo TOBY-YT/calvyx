@@ -188,7 +188,7 @@ def create_user():
             return jsonify({
                 "ok": True,
                 "key": klic,
-                "iframe": f'<iframe src="https://levne3d.cz/kalkulacka.html?klic={klic}" width="600" height="700" style="border:none;"></iframe>',
+                "iframe": f'<iframe src="https://levne3d.cz/calvyx3.html?klic={klic}" width="100%" height="700" style="border:none; display:block;"></iframe>',
                 "updated": True
             })
 
@@ -208,7 +208,7 @@ def create_user():
     return jsonify({
         "ok": True,
         "key": klic,
-        "iframe": f'<iframe src="https://levne3d.cz/kalkulacka.html?klic={klic}" width="600" height="700" style="border:none;"></iframe>'
+        "iframe": f'<iframe src="https://levne3d.cz/calvyx3.html?klic={klic}" width="100%" height="700" style="border:none; display:block;"></iframe>'
     })
 
 # ===============================
